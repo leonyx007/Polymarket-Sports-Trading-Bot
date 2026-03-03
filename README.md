@@ -142,8 +142,8 @@ python scripts/summarize_trading_session.py --journal-dir data/trading
 ```
 Live execution is intentionally guarded by config and adapter checks.
 
-### Sample Output
-![Auto-trader and arbitrage output](/root/.cursor/projects/root-work/assets/c__Users_user_AppData_Roaming_Cursor_User_workspaceStorage_73128371978e98cf0786f3f5f206193e_images_image-9d0cdd5a-08d4-4723-a47f-cef9a96f778b.png)
+### Result Screen
+![Poly Sports Arbitrage Bot result screen](./Polymarket-Sports-Arb-Result.png)
 
 ## Risk Controls
 Signals can be denied for:

@@ -235,11 +235,12 @@ def fetch_odds_for_polymarket_events(
                 odds_events = load_events_from_file(sport_key, events_dir)
                 if odds_events is not None:
                     logger.info(f"  Loaded {len(odds_events)} events from stored file")
-            else:
-                # File doesn't exist or use_stored_events=False, fetch from API
+
+            # Fallback to live API fetch if cache is missing/unreadable.
+            if odds_events is None:
                 odds_events = fetch_events(sport_key, api_key=api_key)
                 logger.info(f"  Fetched {len(odds_events)} events from The Odds API")
-                
+
                 # Save fetched events for future use
                 events_path = Path(events_dir) / f"{sport_key}.json"
                 events_path.parent.mkdir(parents=True, exist_ok=True)
@@ -258,11 +259,17 @@ def fetch_odds_for_polymarket_events(
             
             # Step 3: Fetch odds from The Odds API for the sport
             odds_with_bookmakers = None
-            if use_stored_events:
-                odds_with_bookmakers = load_json(f"data/sportsbook_data/odds/{sport_key}.json")
+            odds_cache_path = Path(f"data/sportsbook_data/odds/{sport_key}.json")
+            if use_stored_events and odds_cache_path.exists():
+                try:
+                    odds_with_bookmakers = load_json(str(odds_cache_path))
+                except Exception:
+                    odds_with_bookmakers = None
                 if odds_with_bookmakers is not None:
                     logger.info(f"  Loaded {len(odds_with_bookmakers)} events from stored file")
-            else:
+
+            # Fallback to live API fetch if cache is missing/unreadable.
+            if odds_with_bookmakers is None:
                 odds_with_bookmakers = fetch_odds(
                     sport_key,
                     api_key=api_key,
