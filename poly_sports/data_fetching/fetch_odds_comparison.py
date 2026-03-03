@@ -1,9 +1,8 @@
 """Fetch and merge odds data from Polymarket and The Odds API for arbitrage analysis."""
 import os
-import json
 from pathlib import Path
 from dotenv import load_dotenv
-from poly_sports.data_fetching.fetch_sports_markets import extract_arbitrage_data, fetch_sports_markets, save_to_csv
+from poly_sports.data_fetching.fetch_sports_markets import save_to_csv
 from poly_sports.utils.file_utils import save_json, load_json
 from poly_sports.data_fetching.fetch_odds_data import fetch_odds_for_polymarket_events
 from poly_sports.utils.logger import logger
@@ -33,27 +32,14 @@ def main() -> None:
         logger.info("Please set ODDS_API_KEY in your .env file")
         return
     
-    logger.info(f"Fetching sports markets from {gamma_api_url}...")
-    
-    # Step 1: Fetch Polymarket sports markets
-    try:
-        events = fetch_sports_markets(gamma_api_url, limit=1500)
-        logger.info(f"Found {len(events)} sports events")
-    except Exception as e:
-        logger.info(f"Error fetching markets: {e}")
-        return
-    
-    # Step 2: Extract arbitrage data
-    logger.info("Extracting arbitrage data...")
-    if exclude_1h_moneyline:
-        logger.info("  Excluding 1h moneyline bets")
-    arbitrage_data = extract_arbitrage_data(events, exclude_1h_moneyline=exclude_1h_moneyline)
-    logger.info(f"Extracted {len(arbitrage_data)} markets for arbitrage analysis")
-    
-    arbitrage_data = load_json("data/arbitrage_data_filtered.json")
+    # Load pre-filtered arbitrage markets created by fetch_sports_markets filter command.
+    filtered_path = Path(output_dir) / "arbitrage_data_filtered.json"
+    logger.info(f"Loading arbitrage data from {filtered_path}...")
+    arbitrage_data = load_json(str(filtered_path))
 
     if not arbitrage_data:
-        logger.info("No arbitrage data found. Exiting.")
+        logger.info("No arbitrage data found. Run the filter step first:")
+        logger.info("python -m poly_sports.data_fetching.fetch_sports_markets filter data/arbitrage_data.json data")
         return
     
     # Step 3: Fetch and merge odds from The Odds API

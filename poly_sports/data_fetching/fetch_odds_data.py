@@ -1,5 +1,6 @@
 """Main integration function for fetching and matching odds data."""
 import traceback
+import sys
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 from collections import defaultdict
@@ -15,9 +16,10 @@ from poly_sports.utils.odds_utils import (
 from poly_sports.utils.file_utils import save_json, load_json
 
 from poly_sports.utils.logger import logger
-import sys
 from pathlib import Path
 
+# Backward-compatibility alias for older tests/import paths.
+sys.modules.setdefault("fetch_odds_data", sys.modules[__name__])
 
 def _enrich_outcome_with_formats(outcome: Dict[str, Any], odds_format: str) -> Dict[str, Any]:
     """
@@ -308,6 +310,7 @@ def fetch_odds_for_polymarket_events(
                 
                 # Consolidate bookmakers into aggregate statistics
                 consolidated = _consolidate_bookmakers(enriched_bookmakers)
+                merged_entry['bookmakers'] = enriched_bookmakers
                 merged_entry['sportsbook_count'] = consolidated['sportsbook_count']
                 merged_entry['sportsbook_outcomes'] = consolidated['sportsbook_outcomes']
                 

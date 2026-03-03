@@ -1,11 +1,15 @@
 """The Odds API client for fetching sportsbook odds."""
 import os
+import sys
 import requests
 from typing import List, Dict, Any, Optional
 from dotenv import load_dotenv
 
 # Load environment variables
 load_dotenv()
+
+# Backward-compatibility alias for older tests/import paths.
+sys.modules.setdefault("fetch_odds_api", sys.modules[__name__])
 
 # Base URL for The Odds API
 ODDS_API_BASE_URL = 'https://api.the-odds-api.com'

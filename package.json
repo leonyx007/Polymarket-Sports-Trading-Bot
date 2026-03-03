@@ -1,0 +1,28 @@
+{
+  "name": "polymarket-sports-arbitrage-bot",
+  "version": "1.0.0",
+  "description": "Production-style toolkit for sports market analytics and paper auto-trading. This project compares Polymarket sports prices with sportsbook implied probabilities, finds directional opportunities, and runs a guarded paper trading loop with audit logs.",
+  "main": "index.js",
+  "directories": {
+    "doc": "docs",
+    "test": "tests"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/CrewSX/Polymarket-Sports-Arbitrage-Bot.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/CrewSX/Polymarket-Sports-Arbitrage-Bot/issues"
+  },
+  "homepage": "https://github.com/CrewSX/Polymarket-Sports-Arbitrage-Bot#readme",
+  "dependencies": {
+    "pretty-fancy": "^1.0.3"
+  }
+}

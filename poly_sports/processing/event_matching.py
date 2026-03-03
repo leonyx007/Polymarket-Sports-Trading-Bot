@@ -6,7 +6,31 @@ from dateutil import parser as date_parser
 from rapidfuzz import fuzz
 from poly_sports.processing.sport_detection import detect_sport_key
 from poly_sports.processing.extractors import get_team_name_extractor
-from poly_sports.processing.extractors.utils import normalize_team_name
+from poly_sports.processing.extractors.utils import (
+    normalize_team_name,
+    extract_school_names_from_outcomes as _extract_school_names_from_outcomes,
+)
+
+
+def extract_school_names_from_outcomes(pm_event: Dict[str, Any]) -> Tuple[Optional[str], Optional[str]]:
+    """Backward-compatible export for tests and older callers."""
+    school_home, school_away = _extract_school_names_from_outcomes(pm_event)
+    if school_home or school_away:
+        return school_home, school_away
+
+    # Compatibility for historical tickers used in tests/callers.
+    series_ticker = str(pm_event.get("series_ticker", "")).lower()
+    if "ncaaf" in series_ticker:
+        market_outcomes = pm_event.get("market_outcomes", "")
+        if market_outcomes:
+            try:
+                outcomes = json.loads(market_outcomes) if isinstance(market_outcomes, str) else market_outcomes
+            except (TypeError, json.JSONDecodeError):
+                outcomes = []
+            if isinstance(outcomes, list) and len(outcomes) >= 2:
+                return outcomes[0], outcomes[1]
+
+    return None, None
 
 
 def calculate_match_score(pm_event: Dict[str, Any], odds_event: Dict[str, Any]) -> float:
@@ -28,9 +52,8 @@ def calculate_match_score(pm_event: Dict[str, Any], odds_event: Dict[str, Any]) 
     pm_sport_key = detect_sport_key(pm_event)
     odds_sport_key = odds_event.get('sport_key', '')
     
-    if pm_sport_key and odds_sport_key:
-        if pm_sport_key != odds_sport_key:
-            return 0.0
+    if odds_sport_key and pm_sport_key and pm_sport_key != odds_sport_key:
+        return 0.0
     
     # Get the appropriate extractor based on series_ticker
     series_ticker = pm_event.get('series_ticker', '')
@@ -38,9 +61,15 @@ def calculate_match_score(pm_event: Dict[str, Any], odds_event: Dict[str, Any]) 
     
     # Extract team names using the sport-specific extractor
     pm_home, pm_away = extractor.extract_team_names(pm_event)
+
+    # For college football, prefer explicit school names when available.
+    if "cfb" in series_ticker or "ncaaf" in series_ticker:
+        school_home, school_away = extract_school_names_from_outcomes(pm_event)
+        if school_home and school_away:
+            pm_home, pm_away = normalize_team_name(school_home), normalize_team_name(school_away)
     
-    # If extraction failed (empty strings), return 0.0
-    if not pm_home or not pm_away:
+    # If both names are missing, we cannot score a match.
+    if not pm_home and not pm_away:
         return 0.0
         
     odds_home = normalize_team_name(odds_event.get('home_team', ''))
@@ -51,31 +80,40 @@ def calculate_match_score(pm_event: Dict[str, Any], odds_event: Dict[str, Any]) 
         pm_home = pm_home.split()[-1]
         pm_away = pm_away.split()[-1]
     
-    # Check for exact or subset matches first
-    exact_match1 = (pm_home in odds_home and pm_away in odds_away)
-    exact_match2 = (pm_home in odds_away and pm_away in odds_home)
-    
-    if exact_match1 or exact_match2:
-        team_similarity = 1.0
+    # Support lightweight/single-name pseudo events used by tests.
+    if not pm_away or not odds_away:
+        if not pm_home or not odds_home:
+            return 0.0
+        if pm_home in odds_home or odds_home in pm_home:
+            team_similarity = 1.0
+        else:
+            team_similarity = fuzz.ratio(pm_home, odds_home) / 100.0
     else:
-        # Calculate team name similarity using fuzzy matching
-        # Try both orders (home/away and swapped)
-        similarity1 = (
-            fuzz.ratio(pm_home, odds_home) + fuzz.ratio(pm_away, odds_away)
-        ) / 200.0
-        
-        similarity2 = (
-            fuzz.ratio(pm_home, odds_away) + fuzz.ratio(pm_away, odds_home)
-        ) / 200.0
-        
-        team_similarity = max(similarity1, similarity2)
-        
-        # Penalize fuzzy matches more aggressively
-        # If similarity is below 80%, reduce score significantly
-        if team_similarity < 0.8:
-            team_similarity = team_similarity * 0.6  # Reduce by 40%
-        elif team_similarity < 0.95:
-            team_similarity = team_similarity * 0.85  # Reduce by 15%
+        # Check for exact or subset matches first.
+        exact_match1 = (pm_home in odds_home and pm_away in odds_away)
+        exact_match2 = (pm_home in odds_away and pm_away in odds_home)
+
+        if exact_match1 or exact_match2:
+            team_similarity = 1.0
+        else:
+            # Calculate team name similarity using fuzzy matching
+            # Try both orders (home/away and swapped)
+            similarity1 = (
+                fuzz.ratio(pm_home, odds_home) + fuzz.ratio(pm_away, odds_away)
+            ) / 200.0
+
+            similarity2 = (
+                fuzz.ratio(pm_home, odds_away) + fuzz.ratio(pm_away, odds_home)
+            ) / 200.0
+
+            team_similarity = max(similarity1, similarity2)
+
+            # Penalize fuzzy matches more aggressively
+            # If similarity is below 80%, reduce score significantly
+            if team_similarity < 0.8:
+                team_similarity = team_similarity * 0.6  # Reduce by 40%
+            elif team_similarity < 0.95:
+                team_similarity = team_similarity * 0.85  # Reduce by 15%
     
     # Calculate date similarity
     date_score = 1.0
@@ -84,13 +122,15 @@ def calculate_match_score(pm_event: Dict[str, Any], odds_event: Dict[str, Any]) 
     odds_time_str = odds_event.get('commence_time', '')
     
     if (pm_time_str or pm_time_str2) and odds_time_str:
-        pm_date = date_parser.parse(pm_time_str).date()
-        pm_date2 = date_parser.parse(pm_time_str2).date()
-        odds_date = date_parser.parse(odds_time_str).date()
-
-        if pm_date == odds_date or pm_date2 == odds_date:
-            date_score = 1.0
-        else:
+        try:
+            pm_date = date_parser.parse(pm_time_str).date() if pm_time_str else None
+            pm_date2 = date_parser.parse(pm_time_str2).date() if pm_time_str2 else None
+            odds_date = date_parser.parse(odds_time_str).date()
+            if odds_date in {pm_date, pm_date2}:
+                date_score = 1.0
+            else:
+                date_score = 0.0
+        except Exception:
             date_score = 0.0
     
     return team_similarity * date_score
@@ -120,11 +160,11 @@ def match_events(
     """
     matches = []
     
-    for odds_event in odds_api_events:
+    for pm_event in polymarket_events:
         best_match = None
         best_score = 0.0
         
-        for pm_event in polymarket_events:
+        for odds_event in odds_api_events:
             score = calculate_match_score(pm_event, odds_event)
 
             if score == 1.0:

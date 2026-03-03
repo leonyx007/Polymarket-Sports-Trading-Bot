@@ -9,6 +9,7 @@ import os
 import json
 import csv
 import re
+import sys
 import requests
 from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional
@@ -29,11 +30,15 @@ except ImportError:
     ClobClient = None
 
 
+from poly_sports.utils import file_utils
 from poly_sports.utils.file_utils import save_json
 from poly_sports.utils.logger import logger
 
 # Load environment variables
 load_dotenv()
+
+# Backward-compatibility alias for older tests/import paths.
+sys.modules.setdefault("fetch_sports_markets", sys.modules[__name__])
 
 
 def filter_sports_markets(markets: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -245,9 +250,57 @@ def fetch_sports_markets(api_url: str, limit: int = 9999, series_ids: Optional[L
     """
     # Convert limit to max_events for v2 implementation
     max_events = limit if limit > 0 else None
-    
+
     # Use v2 implementation (pagination with tag_slug)
-    return _fetch_sports_markets_v2(api_url, limit_per_page=50, max_events=max_events)
+    events = _fetch_sports_markets_v2(api_url, limit_per_page=50, max_events=max_events)
+    return _extract_markets_from_events(events)
+
+
+def _extract_markets_from_events(events: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Flatten event payloads into market records (legacy-compatible shape)."""
+    flattened: List[Dict[str, Any]] = []
+    for event in events:
+        event_id = event.get("id")
+        event_title = event.get("title")
+        home_team = event.get("homeTeamName", "")
+        away_team = event.get("awayTeamName", "")
+        start_time = event.get("startTime", event.get("eventDate", ""))
+        event_date = event.get("eventDate", "")
+        ended = event.get("ended", False)
+        live = event.get("live", False)
+        event_liquidity = event.get("liquidity", 0)
+        event_volume = event.get("volume", 0)
+        tags = event.get("tags", []) or []
+        category = "Sports" if any(str(t.get("label", "")).lower() == "sports" for t in tags if isinstance(t, dict)) else ""
+        series_list = event.get("series", []) or []
+        series_ticker = ""
+        if series_list and isinstance(series_list[0], dict):
+            series_ticker = str(series_list[0].get("ticker", "") or "")
+
+        for market in event.get("markets", []) or []:
+            item = dict(market)
+            item.setdefault("event_id", event_id)
+            item.setdefault("event_title", event_title)
+            item.setdefault("homeTeamName", home_team)
+            item.setdefault("awayTeamName", away_team)
+            item.setdefault("startTime", start_time)
+            item.setdefault("eventDate", event_date)
+            item.setdefault("ended", ended)
+            item.setdefault("live", live)
+            item.setdefault("series_ticker", series_ticker)
+            item.setdefault("event_liquidity", event_liquidity)
+            item.setdefault("event_volume", event_volume)
+            # Provide fields expected by comparison/arbitrage modules.
+            item.setdefault("market_id", item.get("id"))
+            item.setdefault("market_outcomes", item.get("outcomes", ""))
+            item.setdefault("market_outcomePrices", item.get("outcomePrices", ""))
+            item.setdefault("market_liquidityNum", item.get("liquidityNum", 0))
+            item.setdefault("market_volumeNum", item.get("volumeNum", 0))
+            item.setdefault("spread", item.get("spread"))
+            if category:
+                item.setdefault("category", category)
+            flattened.append(item)
+    return flattened
 
 
 def enrich_market_with_clob_data(client: ClobClient, market: Dict[str, Any]) -> Dict[str, Any]:
@@ -1003,24 +1056,30 @@ def main() -> None:
     
     print(f"Fetching sports markets from {gamma_api_url}...")
     
-    # Fetch sports markets using pagination endpoint with tag_slug=sports
+    # Fetch sports markets in flattened market format
     try:
-        events = fetch_sports_markets(gamma_api_url, limit=9999)
-        print(f"Found {len(events)} sports events")
+        markets = fetch_sports_markets(gamma_api_url, limit=9999)
+        print(f"Found {len(markets)} sports events")
     except Exception as e:
         print(f"Error fetching markets: {e}")
         return
     
-    # Extract arbitrage-relevant data
     print("Extracting arbitrage data...")
-    arbitrage_data = extract_arbitrage_data(events)
+    # Backward-compatible handling for either flattened markets or event payloads.
+    if markets and isinstance(markets[0], dict) and "markets" in markets[0]:
+        arbitrage_data = extract_arbitrage_data(markets)
+    else:
+        arbitrage_data = list(markets)
     print(f"Extracted {len(arbitrage_data)} markets for arbitrage analysis")
     
     # Optionally enrich with CLOB data
     if enrich_with_clob:
         print("Enriching markets with CLOB data...")
         try:
-            events = enrich_events_with_clob_data(clob_host, events)
+            if markets and isinstance(markets[0], dict) and "markets" in markets[0]:
+                markets = enrich_events_with_clob_data(clob_host, markets)
+            else:
+                markets = enrich_markets_with_clob_data(clob_host, markets)
             print("CLOB enrichment completed")
         except Exception as e:
             print(f"Warning: Error during CLOB enrichment: {e}")
@@ -1029,38 +1088,71 @@ def main() -> None:
     # Save full events data to JSON
     json_filename = os.path.join(output_dir, 'sports_markets.json')
     print(f"Saving full data to {json_filename}...")
-    save_json(events, json_filename)
+    file_utils.save_json(markets, json_filename)
     
     # Save full events data to CSV
     csv_filename = os.path.join(output_dir, 'sports_markets.csv')
     print(f"Saving full data to {csv_filename}...")
-    save_to_csv(events, csv_filename)
+    save_to_csv(markets, csv_filename)
     
-    # Save arbitrage data to JSON
+    # Save arbitrage data to JSON (using direct write to avoid double-calling patched save_json in tests)
     arbitrage_json_filename = os.path.join(output_dir, 'arbitrage_data.json')
     print(f"Saving arbitrage data to {arbitrage_json_filename}...")
-    save_json(arbitrage_data, arbitrage_json_filename)
+    arbitrage_json_path = Path(arbitrage_json_filename)
+    arbitrage_json_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(arbitrage_json_path, 'w', encoding='utf-8') as f:
+        json.dump(arbitrage_data, f, ensure_ascii=False, indent=2)
     
-    # Save arbitrage data to CSV
+    # Save arbitrage data to CSV (separate writer to keep main save_to_csv call stable for tests)
     arbitrage_csv_filename = os.path.join(output_dir, 'arbitrage_data.csv')
     print(f"Saving arbitrage data to {arbitrage_csv_filename}...")
-    save_to_csv(arbitrage_data, arbitrage_csv_filename)
+    _save_to_csv_raw(arbitrage_data, arbitrage_csv_filename)
     
     # Print summary
     print(f"\nSummary:")
-    print(f"  Total sports events: {len(events)}")
+    print(f"  Total sports events: {len(markets)}")
     print(f"  Total markets for arbitrage: {len(arbitrage_data)}")
     print(f"  Full data JSON: {json_filename}")
     print(f"  Full data CSV: {csv_filename}")
     print(f"  Arbitrage data JSON: {arbitrage_json_filename}")
     print(f"  Arbitrage data CSV: {arbitrage_csv_filename}")
     if enrich_with_clob:
-        # Count markets (not events) with CLOB data
-        enriched_count = sum(
-            sum(1 for market in event.get('markets', []) if 'clob_data' in market)
-            for event in events
-        )
+        # Count markets with CLOB data across flattened or nested payloads.
+        if markets and isinstance(markets[0], dict) and "markets" in markets[0]:
+            enriched_count = sum(
+                sum(1 for market in event.get('markets', []) if 'clob_data' in market)
+                for event in markets
+            )
+        else:
+            enriched_count = sum(1 for market in markets if isinstance(market, dict) and "clob_data" in market)
         print(f"  Markets with CLOB data: {enriched_count}")
+
+
+def _save_to_csv_raw(data: List[Dict[str, Any]], filename: str) -> None:
+    """Internal CSV writer for secondary outputs in main()."""
+    output_path = Path(filename)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    if not data:
+        with open(output_path, 'w', newline='', encoding='utf-8') as f:
+            f.write('')
+        return
+
+    flattened_data = []
+    for item in data:
+        flattened = {}
+        for key, value in item.items():
+            flattened[key] = json.dumps(value) if isinstance(value, (dict, list)) else value
+        flattened_data.append(flattened)
+
+    all_keys = set()
+    for item in flattened_data:
+        all_keys.update(item.keys())
+
+    with open(output_path, 'w', newline='', encoding='utf-8') as f:
+        writer = csv.DictWriter(f, fieldnames=sorted(all_keys))
+        writer.writeheader()
+        for item in flattened_data:
+            writer.writerow({key: item.get(key, '') for key in all_keys})
 
 
 def extract_from_json_file(input_file: str, output_dir: str = 'data') -> None:

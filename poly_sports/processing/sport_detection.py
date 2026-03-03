@@ -120,6 +120,21 @@ def detect_sport_key(event_data: Dict[str, Any]) -> Optional[str]:
     away_team = str(event_data.get('awayTeamName', '')).lower()
     all_teams_text = f"{home_team} {away_team}"
     
+    # Team-name fallback heuristics when ticker is missing/unknown.
+    if all_teams_text:
+        if any(team in all_teams_text for team in NFL_TEAMS):
+            return 'americanfootball_nfl'
+        if any(team in all_teams_text for team in NBA_TEAMS):
+            return 'basketball_nba'
+        if any(team in all_teams_text for team in MLB_TEAMS):
+            return 'baseball_mlb'
+        if any(team in all_teams_text for team in NHL_TEAMS):
+            return 'icehockey_nhl'
+        if any(team in all_teams_text for team in NCAF_TEAMS):
+            return 'americanfootball_ncaaf'
+        if any(team in all_teams_text for team in NCAB_TEAMS):
+            return 'basketball_ncaab'
+
     # Priority 3: Check question/description for keywords
     question = str(event_data.get('question', '')).lower()
     description = str(event_data.get('description', '')).lower()

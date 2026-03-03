@@ -6,7 +6,7 @@ from poly_sports.utils.odds_utils import american_to_implied_prob
 from poly_sports.utils.file_utils import load_json
 
 
-def detect_market_type(outcomes: List[str]) -> str:
+def detect_market_type(outcomes: List[str]) -> Optional[str]:
     """
     Detect market type based on number of outcomes.
     
@@ -22,8 +22,8 @@ def detect_market_type(outcomes: List[str]) -> str:
     elif count == 3:
         return "3-way"
     else:
-        # Handle edge cases - default to 2-way for now
-        raise ValueError("Invalid market type")
+        # Backward-compatible behavior for non-standard outcome counts.
+        return None
 
 
 def calculate_directional_opportunity(
@@ -47,6 +47,10 @@ def calculate_directional_opportunity(
     Returns:
         Dictionary with directional opportunity details if exists, None otherwise
     """
+    # Ignore invalid and dust prices; tiny prices can create unrealistic % returns.
+    if pm_price <= 0 or sb_implied_prob <= 0 or pm_price < 0.01:
+        return None
+
     # Calculate expected price movement
     expected_movement = sb_implied_prob - pm_price
     
@@ -56,7 +60,7 @@ def calculate_directional_opportunity(
     delta_difference = abs(expected_movement)
     
     # Check if profit meets threshold
-    if potential_profit < min_profit_threshold or delta_difference > 0.03:
+    if potential_profit < min_profit_threshold:
         return None
     
     return {
@@ -70,6 +74,55 @@ def calculate_directional_opportunity(
         "potential_profit_absolute": potential_profit * 100.0,  # For $100 stake
         "delta_difference": delta_difference
     }
+
+
+def calculate_sell_points(
+    buy_price: float,
+    sb_implied_prob: float,
+    target_profits: Optional[List[float]] = None
+) -> List[Dict[str, Any]]:
+    """
+    Build sell-point recommendations for a directional long position.
+
+    Args:
+        buy_price: Entry price on Polymarket.
+        sb_implied_prob: Fair-value target from sportsbook implied probability.
+        target_profits: Optional list of target profit percentages (e.g., 0.1 for 10%).
+
+    Returns:
+        List of sell-point dictionaries with target price and confidence labels.
+    """
+    if buy_price <= 0:
+        return []
+
+    targets = target_profits if target_profits is not None else [0.05, 0.10, 0.20]
+    sell_points: List[Dict[str, Any]] = []
+
+    # Fair-value anchor from sportsbook implied probability.
+    fair_target = max(0.0, min(1.0, sb_implied_prob))
+    fair_profit = (fair_target - buy_price) / buy_price
+    sell_points.append(
+        {
+            "description": "Fair value",
+            "target_price": fair_target,
+            "profit_percentage": fair_profit,
+            "confidence": "high",
+        }
+    )
+
+    for target in targets:
+        target_price = max(0.0, min(1.0, buy_price * (1.0 + float(target))))
+        confidence = "medium" if target <= 0.10 else "low"
+        sell_points.append(
+            {
+                "description": f"{int(target * 100)}% profit target",
+                "target_price": target_price,
+                "profit_percentage": target,
+                "confidence": confidence,
+            }
+        )
+
+    return sell_points
 
 
 def match_outcomes_by_name(
@@ -261,6 +314,7 @@ def detect_arbitrage_opportunities(
                         
                         # Matched outcomes
                         'matched_outcomes': [matched_outcome_data],
+                        'sell_points': calculate_sell_points(pm_price, sb_implied_prob),
                         
                         # Additional context
                         'pm_spread': entry.get('pm_spread'),
@@ -275,7 +329,11 @@ def detect_arbitrage_opportunities(
             continue
     
     # Filter by profit threshold (double-check)
-    opportunities = [opp for opp in opportunities if opp.get('profit_margin', 0) >= min_profit_threshold and opp.get('liquidity', 0) >= min_liquidity]
+    opportunities = [
+        opp for opp in opportunities
+        if opp.get('profit_margin', 0) >= min_profit_threshold
+        and float(opp.get('pm_liquidity') or 0) >= float(min_liquidity)
+    ]
     
     return opportunities
 
