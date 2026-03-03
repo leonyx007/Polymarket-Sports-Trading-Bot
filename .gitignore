@@ -4,6 +4,14 @@ credentials.json
 .env.*
 positions/
 
+# Large generated datasets and trading artifacts
+data/
+directional_arbitrage.json
+
+# Optional Node bridge artifacts
+node_modules/
+npm-debug.log*
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
